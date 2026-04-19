@@ -1,7 +1,8 @@
-"""Shared bootstrap helpers for early profile/home resolution."""
+"""Shared bootstrap helpers for early Hermes startup."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional, Sequence
 
 
@@ -47,3 +48,35 @@ def resolve_profile_home(profile_name: str) -> str:
     from hermes_cli.profiles import resolve_profile_env
 
     return resolve_profile_env(profile_name)
+
+
+def load_cli_dotenv(project_root: Path) -> None:
+    """Load CLI dotenv files in the existing user-then-project order."""
+    from hermes_cli.env_loader import load_hermes_dotenv
+
+    load_hermes_dotenv(project_env=project_root / ".env")
+
+
+def setup_cli_logging_early() -> None:
+    """Initialize centralized logging for CLI entrypoints."""
+    try:
+        from hermes_logging import setup_logging as _setup_logging
+
+        _setup_logging(mode="cli")
+    except Exception:
+        pass
+
+
+def apply_cli_ipv4_preference_early() -> None:
+    """Apply IPv4 preference before any HTTP clients are created."""
+    try:
+        from hermes_cli.config import load_config as _load_config_early
+        from hermes_constants import apply_ipv4_preference as _apply_ipv4
+
+        _early_cfg = _load_config_early()
+        _net = _early_cfg.get("network", {})
+        if isinstance(_net, dict) and _net.get("force_ipv4"):
+            _apply_ipv4(force=True)
+        del _early_cfg, _net
+    except Exception:
+        pass

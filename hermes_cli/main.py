@@ -115,29 +115,21 @@ _apply_profile_override()
 
 # Load .env from ~/.hermes/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
-from hermes_cli.config import get_hermes_home
-from hermes_cli.env_loader import load_hermes_dotenv
-load_hermes_dotenv(project_env=PROJECT_ROOT / '.env')
+from hermes_cli.config import get_hermes_home  # backward-compat module export
+from hermes_bootstrap import (
+    apply_cli_ipv4_preference_early,
+    load_cli_dotenv,
+    setup_cli_logging_early,
+)
+
+load_cli_dotenv(PROJECT_ROOT)
 
 # Initialize centralized file logging early — all `hermes` subcommands
 # (chat, setup, gateway, config, etc.) write to agent.log + errors.log.
-try:
-    from hermes_logging import setup_logging as _setup_logging
-    _setup_logging(mode="cli")
-except Exception:
-    pass  # best-effort — don't crash the CLI if logging setup fails
+setup_cli_logging_early()
 
 # Apply IPv4 preference early, before any HTTP clients are created.
-try:
-    from hermes_cli.config import load_config as _load_config_early
-    from hermes_constants import apply_ipv4_preference as _apply_ipv4
-    _early_cfg = _load_config_early()
-    _net = _early_cfg.get("network", {})
-    if isinstance(_net, dict) and _net.get("force_ipv4"):
-        _apply_ipv4(force=True)
-    del _early_cfg, _net
-except Exception:
-    pass  # best-effort — don't crash if config isn't available yet
+apply_cli_ipv4_preference_early()
 
 import logging
 import time as _time
