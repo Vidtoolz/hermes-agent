@@ -82,39 +82,15 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # ---------------------------------------------------------------------------
 def _apply_profile_override() -> None:
     """Pre-parse --profile/-p and set HERMES_HOME before module imports."""
+    from hermes_bootstrap import resolve_profile_home, resolve_profile_override
+
     argv = sys.argv[1:]
-    profile_name = None
-    consume = 0
-
-    # 1. Check for explicit -p / --profile flag
-    for i, arg in enumerate(argv):
-        if arg in ("--profile", "-p") and i + 1 < len(argv):
-            profile_name = argv[i + 1]
-            consume = 2
-            break
-        elif arg.startswith("--profile="):
-            profile_name = arg.split("=", 1)[1]
-            consume = 1
-            break
-
-    # 2. If no flag, check active_profile in the hermes root
-    if profile_name is None:
-        try:
-            from hermes_constants import get_default_hermes_root
-            active_path = get_default_hermes_root() / "active_profile"
-            if active_path.exists():
-                name = active_path.read_text().strip()
-                if name and name != "default":
-                    profile_name = name
-                    consume = 0  # don't strip anything from argv
-        except (UnicodeDecodeError, OSError):
-            pass  # corrupted file, skip
+    profile_name, consume = resolve_profile_override(argv)
 
     # 3. If we found a profile, resolve and set HERMES_HOME
     if profile_name is not None:
         try:
-            from hermes_cli.profiles import resolve_profile_env
-            hermes_home = resolve_profile_env(profile_name)
+            hermes_home = resolve_profile_home(profile_name)
         except (ValueError, FileNotFoundError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
