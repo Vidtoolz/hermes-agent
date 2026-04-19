@@ -57,8 +57,8 @@ def load_cli_dotenv(project_root: Path) -> None:
     load_hermes_dotenv(project_env=project_root / ".env")
 
 
-def load_runtime_dotenv(hermes_home: Path, project_env: Path) -> list[Path]:
-    """Load runtime dotenv files with explicit home + project paths."""
+def load_runtime_dotenv(hermes_home: Path, project_env: Path | None = None) -> list[Path]:
+    """Load runtime dotenv files with explicit home + optional project path."""
     from hermes_cli.env_loader import load_hermes_dotenv
 
     return load_hermes_dotenv(hermes_home=hermes_home, project_env=project_env)
