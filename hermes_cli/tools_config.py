@@ -57,6 +57,7 @@ CONFIGURABLE_TOOLSETS = [
     ("code_execution",  "⚡ Code Execution",            "execute_code"),
     ("vision",          "👁️  Vision / Image Analysis",  "vision_analyze"),
     ("image_gen",       "🎨 Image Generation",          "image_generate"),
+    ("vidnux",          "🖥️ Vidnux Workstation",     "vidnux_status"),
     ("moa",             "🧠 Mixture of Agents",         "mixture_of_agents"),
     ("tts",             "🔊 Text-to-Speech",            "text_to_speech"),
     ("skills",          "📚 Skills",                    "list, view, manage"),
@@ -88,6 +89,7 @@ _DEFAULT_OFF_TOOLSETS = {"moa", "homeassistant", "rl", "spotify", "discord", "di
 # server admin, Slack workspace admin, etc.).  Keeps every other platform's
 # checklist from filling up with irrelevant toggles.
 _TOOLSET_PLATFORM_RESTRICTIONS: Dict[str, Set[str]] = {
+    "vidnux": {"cli"},
     "discord": {"discord"},
     "discord_admin": {"discord"},
 }

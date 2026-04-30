@@ -97,6 +97,12 @@ TOOLSETS = {
         "includes": []
     },
     
+    "vidnux": {
+        "description": "Vidnux workstation diagnostics and Resolve/Hermes environment checks",
+        "tools": ["vidnux_status"],
+        "includes": []
+    },
+
     "moa": {
         "description": "Advanced reasoning and problem-solving tools",
         "tools": ["mixture_of_agents"],
