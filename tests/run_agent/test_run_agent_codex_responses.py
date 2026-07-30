@@ -2731,3 +2731,168 @@ def test_run_conversation_codex_invalid_encrypted_content_without_replay_state_d
     assert all(not any(item.get("type") == "reasoning" for item in payload["input"]) for payload in request_payloads)
     assert agent._codex_reasoning_replay_enabled is True
     assert result["messages"][0].get("codex_reasoning_items") is None
+
+
+def _build_direct_openai_sol_agent(monkeypatch, *, api_mode="codex_responses"):
+    _patch_agent_bootstrap(monkeypatch)
+    agent = run_agent.AIAgent(
+        model="gpt-5.6-sol",
+        provider="custom",
+        api_mode=api_mode,
+        base_url="https://api.openai.com/v1",
+        api_key="openai-token",
+        reasoning_config={"enabled": True, "effort": "high"},
+        quiet_mode=True,
+        max_iterations=4,
+        skip_context_files=True,
+        skip_memory=True,
+    )
+    agent._cleanup_task_resources = lambda task_id: None
+    agent._persist_session = lambda messages, history=None: None
+    agent._save_trajectory = lambda messages, user_message, completed: None
+    return agent
+
+
+def test_gpt_5_6_sol_tools_and_reasoning_use_responses_api(monkeypatch):
+    agent = _build_direct_openai_sol_agent(monkeypatch)
+    kwargs = agent._build_api_kwargs([
+        {"role": "system", "content": "You are Hermes."},
+        {"role": "user", "content": "Run a tool."},
+    ])
+
+    assert agent.api_mode == "codex_responses"
+    assert kwargs["reasoning"] == {"effort": "high", "summary": "auto"}
+    assert kwargs["tools"][0]["name"] == "terminal"
+
+    calls = {"responses": 0, "chat": 0}
+
+    class _Responses:
+        def create(self, **request):
+            calls["responses"] += 1
+            assert request["stream"] is True
+            assert request["reasoning"]["effort"] == "high"
+            return _codex_message_response("done")
+
+    class _ChatCompletions:
+        def create(self, **request):
+            calls["chat"] += 1
+            raise AssertionError("gpt-5.6-sol tool request used /v1/chat/completions")
+
+    client = SimpleNamespace(
+        responses=_Responses(),
+        chat=SimpleNamespace(completions=_ChatCompletions()),
+    )
+    monkeypatch.setattr(
+        agent, "_create_request_openai_client", lambda **kwargs: client
+    )
+    monkeypatch.setattr(agent, "_close_request_openai_client", lambda *args, **kwargs: None)
+
+    response = agent._interruptible_api_call(kwargs)
+
+    assert response.output[0].type == "message"
+    assert calls == {"responses": 1, "chat": 0}
+
+
+def test_gpt_5_6_sol_responses_tool_call_round_trip(monkeypatch):
+    agent = _build_direct_openai_sol_agent(monkeypatch)
+    kwargs = agent._build_api_kwargs([
+        {"role": "user", "content": "Check the workspace."},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call_abc",
+                "call_id": "call_abc",
+                "response_item_id": "fc_abc",
+                "type": "function",
+                "function": {"name": "terminal", "arguments": "{\"command\":\"pwd\"}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call_abc", "content": "/home/vidtoolz"},
+    ])
+
+    function_call = next(item for item in kwargs["input"] if item.get("type") == "function_call")
+    function_output = next(
+        item for item in kwargs["input"] if item.get("type") == "function_call_output"
+    )
+    assert function_call == {
+        "type": "function_call",
+        "call_id": "call_abc",
+        "name": "terminal",
+        "arguments": "{\"command\":\"pwd\"}",
+    }
+    assert function_output == {
+        "type": "function_call_output",
+        "call_id": "call_abc",
+        "output": "/home/vidtoolz",
+    }
+
+
+def test_gpt_5_6_sol_responses_streaming_text_usage_and_completion(monkeypatch):
+    from agent.codex_runtime import _consume_codex_event_stream
+    from agent.usage_pricing import normalize_usage
+
+    events = [
+        SimpleNamespace(
+            type="response.output_item.added",
+            item=SimpleNamespace(type="message", phase="final_answer"),
+        ),
+        SimpleNamespace(type="response.output_text.delta", delta="Hello"),
+        SimpleNamespace(type="response.output_text.delta", delta=" world"),
+        SimpleNamespace(
+            type="response.output_item.done",
+            item=SimpleNamespace(
+                type="message",
+                role="assistant",
+                status="completed",
+                content=[SimpleNamespace(type="output_text", text="Hello world")],
+            ),
+        ),
+        SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(
+                id="resp_sol",
+                status="completed",
+                usage=SimpleNamespace(
+                    input_tokens=13,
+                    output_tokens=5,
+                    input_tokens_details=SimpleNamespace(cached_tokens=3),
+                ),
+            ),
+        ),
+    ]
+
+    final = _consume_codex_event_stream(iter(events), model="gpt-5.6-sol")
+    normalized = _build_direct_openai_sol_agent(monkeypatch)._get_transport().normalize_response(final)
+    usage = normalize_usage(final.usage, provider="custom", api_mode="codex_responses")
+
+    assert final.output_text == "Hello world"
+    assert normalized.content == "Hello world"
+    assert normalized.finish_reason == "stop"
+    assert usage.input_tokens == 10
+    assert usage.cache_read_tokens == 3
+    assert usage.output_tokens == 5
+
+
+def test_gpt_5_6_sol_deterministic_http_400_is_not_retried(monkeypatch):
+    agent = _build_direct_openai_sol_agent(monkeypatch)
+    calls = {"count": 0}
+
+    class _DeterministicBadRequest(Exception):
+        status_code = 400
+        body = {"error": {"type": "invalid_request_error", "code": None}}
+
+    def _fail_once(api_kwargs):
+        calls["count"] += 1
+        raise _DeterministicBadRequest(
+            "Function tools with reasoning_effort are not supported for gpt-5.6-sol"
+        )
+
+    monkeypatch.setattr(agent, "_interruptible_api_call", _fail_once)
+    result = agent.run_conversation("Use a tool.")
+
+    assert calls["count"] == 1
+    assert result["api_calls"] == 1
+    assert result["completed"] is False
+    assert result["failed"] is True
+    assert "reasoning_effort" in result["error"]

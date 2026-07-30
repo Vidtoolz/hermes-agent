@@ -730,13 +730,14 @@ def load_cli_config() -> Dict[str, Any]:
 CLI_CONFIG = load_cli_config()
 
 
-# Initialize centralized logging early — agent.log + errors.log in ~/.hermes/logs/.
-# This ensures CLI sessions produce a log trail even before AIAgent is instantiated.
-try:
-    from hermes_logging import setup_logging
-    setup_logging(mode="cli")
-except Exception:
-    pass  # Logging setup is best-effort — don't crash the CLI
+def _initialize_legacy_cli_logging() -> None:
+    """Initialize legacy CLI logging only when its application entry runs."""
+    try:
+        from hermes_logging import setup_logging
+
+        setup_logging(mode="cli")
+    except Exception:
+        pass  # Logging setup is best-effort — don't crash the CLI
 
 # Validate config structure early — print warnings before user hits cryptic errors
 try:
@@ -15815,6 +15816,7 @@ def main(
         python cli.py -w -q "Fix issue #123"     # Single query in worktree
     """
     global _active_worktree
+    _initialize_legacy_cli_logging()
 
     # Force UTF-8 stdio on Windows before any banner/print() runs — the
     # Rich console prints Unicode box-drawing characters that would

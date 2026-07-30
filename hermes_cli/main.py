@@ -577,23 +577,21 @@ try:
 except Exception:
     pass  # best-effort — redaction stays at default (enabled) on config errors
 
-# Initialize centralized file logging early — all `hermes` subcommands
-# (chat, setup, gateway, config, etc.) write to agent.log + errors.log.
-# Dashboard entrypoints bootstrap with GUI mode so gui.log is always present
-# during GUI testing, including pre-dispatch startup failures.
-try:
-    from hermes_logging import setup_logging as _setup_logging
+def _initialize_cli_logging() -> None:
+    """Initialize file logging only when the CLI application is entered."""
+    try:
+        from hermes_logging import setup_logging as _setup_logging
 
-    _setup_logging(
-        mode=(
-            "gui"
-            if next((arg for arg in sys.argv[1:] if not arg.startswith("-")), "")
-            in {"dashboard", "serve", "gui", "desktop"}
-            else "cli"
+        _setup_logging(
+            mode=(
+                "gui"
+                if next((arg for arg in sys.argv[1:] if not arg.startswith("-")), "")
+                in {"dashboard", "serve", "gui", "desktop"}
+                else "cli"
+            )
         )
-    )
-except Exception:
-    pass  # best-effort — don't crash the CLI if logging setup fails
+    except Exception:
+        pass  # best-effort — don't crash the CLI if logging setup fails
 
 # Apply IPv4 preference early, before any HTTP clients are created.
 # We already determined whether to force IPv4 from the raw yaml read above —
@@ -12784,6 +12782,8 @@ def cmd_claw(args):
 
 def main():
     """Main entry point for hermes CLI."""
+    _initialize_cli_logging()
+
     # Cosmetic: make the process show up as 'hermes' instead of 'python3.11'
     # in ps/top/htop.  Non-fatal — just a nicer UX.
     _set_process_title()

@@ -247,19 +247,25 @@ def _responses_tools(tools: Optional[List[Dict[str, Any]]] = None) -> Optional[L
         return None
 
     converted: List[Dict[str, Any]] = []
-    for item in tools:
-        fn = item.get("function", {}) if isinstance(item, dict) else {}
+    for index, item in enumerate(tools):
+        if not isinstance(item, dict) or item.get("type") != "function":
+            raise ValueError(
+                f"Responses tool[{index}] must be a Chat Completions function tool."
+            )
+        fn = item.get("function")
+        if not isinstance(fn, dict):
+            raise ValueError(f"Responses tool[{index}] is missing its function definition.")
         name = fn.get("name")
         if not isinstance(name, str) or not name.strip():
-            continue
+            raise ValueError(f"Responses tool[{index}] is missing function.name.")
         converted.append({
             "type": "function",
-            "name": name,
+            "name": name.strip(),
             "description": fn.get("description", ""),
             "strict": False,
             "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
         })
-    return converted or None
+    return converted
 
 
 # Provider-executed built-in tool *declaration* types accepted on the

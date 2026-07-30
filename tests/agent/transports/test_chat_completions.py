@@ -25,6 +25,36 @@ class TestChatCompletionsBasic:
         tools = [{"type": "function", "function": {"name": "test", "parameters": {}}}]
         assert transport.convert_tools(tools) is tools
 
+    def test_gpt_5_6_sol_legacy_chat_keeps_tools_without_reasoning_effort(self, transport):
+        from providers import get_provider_profile
+
+        tools = [{
+            "type": "function",
+            "function": {
+                "name": "terminal",
+                "description": "Run a command",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }]
+        kwargs = transport.build_kwargs(
+            model="gpt-5.6-sol",
+            messages=[{"role": "user", "content": "Run a tool."}],
+            tools=tools,
+            base_url="https://api.openai.com/v1",
+            provider_profile=get_provider_profile("custom"),
+            reasoning_config={"enabled": True, "effort": "high"},
+            request_overrides={"reasoning_effort": "high"},
+        )
+
+        assert kwargs["tools"] == tools
+        assert "reasoning_effort" not in kwargs
+
+    def test_responses_tool_conversion_rejects_invalid_tools_instead_of_dropping_them(self):
+        from agent.codex_responses_adapter import _responses_tools
+
+        with pytest.raises(ValueError, match="missing function.name"):
+            _responses_tools([{"type": "function", "function": {"parameters": {}}}])
+
     def test_convert_messages_no_codex_leaks(self, transport):
         msgs = [{"role": "user", "content": "hi"}]
         result = transport.convert_messages(msgs)

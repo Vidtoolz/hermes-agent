@@ -10,6 +10,7 @@ reasoning configuration, temperature handling, and extra_body assembly.
 """
 
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 from agent.lmstudio_reasoning import resolve_lmstudio_effort
 from agent.moonshot_schema import is_moonshot_model, sanitize_moonshot_tools
@@ -112,6 +113,41 @@ def _model_consumes_thought_signature(model: Any) -> bool:
     """
     m = str(model or "").lower()
     return "gemini" in m or "gemma" in m
+
+
+def _guard_legacy_openai_tool_reasoning(
+    api_kwargs: dict[str, Any],
+    *,
+    model: str,
+    tools: list[dict[str, Any]] | None,
+    base_url: Any,
+) -> dict[str, Any]:
+    """Keep deliberate GPT-5.6-SOL chat requests compatible with tools.
+
+    Native OpenAI rejects ``reasoning_effort`` when function tools are sent
+    to ``/v1/chat/completions`` for this model. The normal configured route is
+    the Responses API, where reasoning effort is preserved. This guard only
+    covers an explicitly retained legacy Chat Completions route; it never
+    removes tools and does not affect relays or other models.
+    """
+    normalized_model = str(model or "").strip().lower().rsplit("/", 1)[-1]
+    try:
+        hostname = (urlparse(str(base_url or "")).hostname or "").lower()
+    except ValueError:
+        hostname = ""
+    if normalized_model != "gpt-5.6-sol" or not tools or hostname != "api.openai.com":
+        return api_kwargs
+
+    api_kwargs.pop("reasoning_effort", None)
+    extra_body = api_kwargs.get("extra_body")
+    if isinstance(extra_body, dict) and "reasoning_effort" in extra_body:
+        cleaned_extra_body = dict(extra_body)
+        cleaned_extra_body.pop("reasoning_effort", None)
+        if cleaned_extra_body:
+            api_kwargs["extra_body"] = cleaned_extra_body
+        else:
+            api_kwargs.pop("extra_body", None)
+    return api_kwargs
 
 
 class ChatCompletionsTransport(ProviderTransport):
@@ -316,8 +352,14 @@ class ChatCompletionsTransport(ProviderTransport):
         # ── Provider profile: single-path when present ──────────────────
         _profile = params.get("provider_profile")
         if _profile:
-            return self._build_kwargs_from_profile(
+            api_kwargs = self._build_kwargs_from_profile(
                 _profile, model, sanitized, tools, params
+            )
+            return _guard_legacy_openai_tool_reasoning(
+                api_kwargs,
+                model=model,
+                tools=tools,
+                base_url=params.get("base_url"),
             )
 
         # ── Legacy fallback (unregistered / unknown provider) ───────────
@@ -489,7 +531,12 @@ class ChatCompletionsTransport(ProviderTransport):
         if overrides:
             api_kwargs.update(overrides)
 
-        return api_kwargs
+        return _guard_legacy_openai_tool_reasoning(
+            api_kwargs,
+            model=model,
+            tools=tools,
+            base_url=base_url,
+        )
 
     def _build_kwargs_from_profile(self, profile, model, sanitized, tools, params):
         """Build API kwargs using a ProviderProfile — single path, no legacy flags.

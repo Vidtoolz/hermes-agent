@@ -20,11 +20,23 @@ test runner at ``scripts/run_tests.sh``.
 """
 
 import asyncio
+import atexit
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
+
+# Establish isolation before pytest imports any test module. The per-test
+# fixture below replaces this with a tmp_path-scoped home during execution,
+# but collection-time imports must never see the user's real Hermes home.
+_COLLECTION_HERMES_HOME = Path(tempfile.mkdtemp(prefix="hermes-pytest-collection-"))
+for _subdir in ("sessions", "cron", "memories", "skills", "logs"):
+    (_COLLECTION_HERMES_HOME / _subdir).mkdir()
+os.environ["HERMES_HOME"] = str(_COLLECTION_HERMES_HOME)
+atexit.register(shutil.rmtree, _COLLECTION_HERMES_HOME, ignore_errors=True)
 
 # Ensure project root is importable
 PROJECT_ROOT = Path(__file__).parent.parent
