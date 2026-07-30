@@ -1,11 +1,13 @@
-"""Regression: installer/bootstrap must recover from diverged managed clones.
+"""Regression: installer/bootstrap must FAIL CLOSED on diverged managed clones.
 
 When ``~/.hermes/hermes-agent`` has local-only commits (or diverged history),
-``git pull --ff-only`` fails with exit 128 and bootstrap aborts at the
-repository stage. ``hermes update`` already resets to ``origin/$BRANCH`` in
-that case; both installer scripts must do the same.
+``git pull --ff-only`` fails with exit 128. The old installer scripts fell back
+to ``git reset --hard origin/$BRANCH``, which silently destroys local-only
+commits — the pre-update stash never covers commits (2026-07-19 incident). An
+updater must never reset over local work: it must refuse, explain, preserve
+everything, and let the human resolve the divergence.
 
-Fixes the bootstrap failure seen in #53257 and desktop update paths that run
+Covers the bootstrap failure seen in #53257 and desktop update paths that run
 ``install.ps1`` / ``install.sh`` non-interactively.
 """
 
@@ -41,27 +43,27 @@ def _extract_install_ps1_branch_update_block() -> str:
     return match["block"]
 
 
-def test_install_sh_resets_when_ff_only_pull_fails() -> None:
+def test_install_sh_fails_closed_when_ff_only_pull_fails() -> None:
     block = _extract_install_sh_update_block()
 
     assert 'git pull --ff-only origin "$BRANCH"' in block
-    assert 'git reset --hard "origin/$BRANCH"' in block
-    assert "Fast-forward not possible" in block
+    assert "Update refused: fast-forward not possible" in block
+    assert "Nothing was changed" in block
+    assert "git log --oneline origin/$BRANCH..HEAD" in block
+    assert "exit 1" in block
 
-    pull_idx = block.find('git pull --ff-only origin "$BRANCH"')
-    reset_idx = block.find('git reset --hard "origin/$BRANCH"')
-    assert pull_idx != -1 and reset_idx != -1
-    assert pull_idx < reset_idx, "ff-only pull must be attempted before reset fallback"
+    # The whole point: no reset-over-local-work fallback may remain.
+    assert 'git reset --hard "origin/$BRANCH"' not in block
 
 
-def test_install_ps1_resets_when_ff_only_pull_fails() -> None:
+def test_install_ps1_fails_closed_when_ff_only_pull_fails() -> None:
     block = _extract_install_ps1_branch_update_block()
 
     assert "pull --ff-only origin $Branch" in block
-    assert 'reset --hard "origin/$Branch"' in block
-    assert "Fast-forward not possible" in block
+    assert "Update refused: fast-forward not possible" in block
+    assert "Nothing was changed" in block
+    assert "git log --oneline origin/$Branch..HEAD" in block
+    assert "throw" in block
 
-    pull_idx = block.find("pull --ff-only origin $Branch")
-    reset_idx = block.find('reset --hard "origin/$Branch"')
-    assert pull_idx != -1 and reset_idx != -1
-    assert pull_idx < reset_idx, "ff-only pull must be attempted before reset fallback"
+    # The whole point: no reset-over-local-work fallback may remain.
+    assert 'reset --hard "origin/$Branch"' not in block

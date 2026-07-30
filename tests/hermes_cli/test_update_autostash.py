@@ -166,10 +166,19 @@ def _make_update_side_effect(
 # reset --hard failure — don't attempt stash restore
 # ---------------------------------------------------------------------------
 
-def test_cmd_update_skips_stash_restore_when_reset_fails(monkeypatch, tmp_path, capsys):
-    """When reset --hard fails, stash restore is skipped with a helpful message."""
+# ---------------------------------------------------------------------------
+# ff-only failure on diverged history — FAIL CLOSED, never reset over local work
+# ---------------------------------------------------------------------------
+
+def test_cmd_update_refuses_reset_over_local_commits(monkeypatch, tmp_path, capsys):
+    """Diverged history must stop the update, never reset over local commits.
+
+    Regression: ``git pull --ff-only`` used to fall back to
+    ``git reset --hard origin/main`` — silently destroying local-only commits
+    that the pre-update stash never covers (2026-07-19 incident). A self-updater
+    must fail closed, preserve HEAD/branches/stash, and print the recovery path.
+    """
     _setup_update_mocks(monkeypatch, tmp_path)
-    # Re-enable stash so it actually returns a ref
     monkeypatch.setattr(
         hermes_main, "_stash_local_changes_if_needed",
         lambda *a, **kw: "abc123deadbeef",
@@ -180,16 +189,26 @@ def test_cmd_update_skips_stash_restore_when_reset_fails(monkeypatch, tmp_path, 
         lambda *a, **kw: restore_calls.append(1) or True,
     )
 
-    side_effect, _ = _make_update_side_effect(ff_only_fails=True, reset_fails=True)
+    side_effect, recorded = _make_update_side_effect(ff_only_fails=True)
     monkeypatch.setattr(hermes_main.subprocess, "run", side_effect)
 
     with pytest.raises(SystemExit, match="1"):
         hermes_main.cmd_update(SimpleNamespace())
 
-    # Stash restore should NOT have been called
-    assert len(restore_calls) == 0
-
     out = capsys.readouterr().out
+    assert "Update refused: fast-forward not possible" in out
+    assert "local history has diverged" in out
+    assert "Nothing was changed" in out
+    assert "git -C" in out and "log --oneline origin/main..HEAD" in out
+
+    # The whole point: no reset command may be issued, and the stash must be
+    # left intact for the human.
+    reset_cmds = [
+        c for c in recorded
+        if "reset" in " ".join(str(x) for x in c) and "--hard" in " ".join(str(x) for x in c)
+    ]
+    assert reset_cmds == [], f"updater must not run git reset --hard: {reset_cmds}"
+    assert len(restore_calls) == 0
     assert "preserved in stash" in out
 
 
