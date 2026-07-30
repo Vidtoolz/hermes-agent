@@ -99,7 +99,7 @@ TOOLSETS = {
     
     "vidnux": {
         "description": "Vidnux workstation diagnostics and Resolve/Hermes environment checks",
-        "tools": ["vidnux_status"],
+        "tools": ["vidnux_status", "nas_mount_check"],
         "includes": []
     },
 
