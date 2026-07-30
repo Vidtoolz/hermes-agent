@@ -310,3 +310,133 @@ def _xai_reasoning_only_response(reasoning_text):
 
 
 
+
+
+# ---------------------------------------------------------------------------
+# _responses_tools — fail fast on malformed Chat Completions tool definitions
+# instead of silently skipping them.  A silently dropped tool removes an
+# agent capability with no diagnostic, and the surviving partial list would
+# be transmitted as if it were the whole request; the downstream
+# _preflight_codex_api_kwargs validator only sees what survives conversion,
+# so it cannot catch the omission.  Recovered intent from stash 741ccc58
+# (recovery/hermes-codex-adapter-stash-741ccc58, 29d422f0), adapted to pass
+# provider-executed built-in declarations through like the preflight does.
+# ---------------------------------------------------------------------------
+
+
+def _valid_function_tool(name="read_file", **overrides):
+    fn = {
+        "name": name,
+        "description": "Read a file.",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+    }
+    fn.update(overrides)
+    return {"type": "function", "function": fn}
+
+
+def test_responses_tools_converts_valid_function_tool_deterministically():
+    from agent.codex_responses_adapter import _responses_tools
+
+    tools = [_valid_function_tool(), _valid_function_tool(name="write_file")]
+    out = _responses_tools(tools)
+    assert [t["name"] for t in out] == ["read_file", "write_file"]  # order preserved
+    assert out[0] == {
+        "type": "function",
+        "name": "read_file",
+        "description": "Read a file.",
+        "strict": False,
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+    }
+    assert _responses_tools(tools) == out  # deterministic
+
+
+def test_responses_tools_does_not_mutate_caller_input():
+    from agent.codex_responses_adapter import _responses_tools
+    import copy
+
+    tools = [_valid_function_tool(name="  padded  ")]
+    snapshot = copy.deepcopy(tools)
+    out = _responses_tools(tools)
+    assert tools == snapshot  # caller input untouched
+    assert out[0]["name"] == "padded"  # converted name is stripped
+
+
+def test_responses_tools_empty_and_none_input():
+    from agent.codex_responses_adapter import _responses_tools
+
+    assert _responses_tools(None) is None
+    assert _responses_tools([]) is None
+
+
+def test_responses_tools_rejects_non_object_tool_with_index():
+    from agent.codex_responses_adapter import _responses_tools
+
+    with pytest.raises(ValueError, match=r"tool\[1\] must be an object"):
+        _responses_tools([_valid_function_tool(), "not-a-tool"])
+
+
+def test_responses_tools_rejects_unsupported_type_with_index_and_no_payload():
+    from agent.codex_responses_adapter import _responses_tools
+
+    secret_payload = {"type": "banana", "function": {"name": "sk-SECRET-VALUE"}}
+    with pytest.raises(ValueError) as excinfo:
+        _responses_tools([secret_payload])
+    message = str(excinfo.value)
+    assert "tool[0]" in message and "'banana'" in message
+    assert "sk-SECRET-VALUE" not in message  # no payload values leaked
+
+
+def test_responses_tools_rejects_missing_function_definition():
+    from agent.codex_responses_adapter import _responses_tools
+
+    with pytest.raises(ValueError, match=r"tool\[0\] is missing its function definition"):
+        _responses_tools([{"type": "function"}])
+    with pytest.raises(ValueError, match=r"tool\[0\] is missing its function definition"):
+        _responses_tools([{"type": "function", "function": "nope"}])
+
+
+def test_responses_tools_rejects_missing_or_empty_name():
+    from agent.codex_responses_adapter import _responses_tools
+
+    with pytest.raises(ValueError, match=r"tool\[0\] is missing function\.name"):
+        _responses_tools([{"type": "function", "function": {"parameters": {}}}])
+    with pytest.raises(ValueError, match=r"tool\[0\] is missing function\.name"):
+        _responses_tools([_valid_function_tool(name="   ")])
+
+
+def test_responses_tools_mixed_list_fails_whole_request_no_partial_output():
+    """Regression control: under the old silent-skip behavior this returned a
+    1-tool partial list; the corrected behavior refuses the whole conversion
+    so no partial tool list can ever be transmitted."""
+    from agent.codex_responses_adapter import _responses_tools
+
+    mixed = [_valid_function_tool(), {"type": "function", "function": {"parameters": {}}}]
+    with pytest.raises(ValueError, match=r"tool\[1\]"):
+        _responses_tools(mixed)
+
+
+def test_responses_tools_passes_builtin_declarations_through_verbatim():
+    """A ``{"type": "web_search"}`` built-in declaration was previously
+    silently dropped (no function schema -> no name -> skip); it must pass
+    through verbatim like _preflight_codex_api_kwargs does."""
+    from agent.codex_responses_adapter import _responses_tools
+
+    tools = [{"type": "web_search"}, _valid_function_tool()]
+    out = _responses_tools(tools)
+    assert out[0] == {"type": "web_search"}
+    assert out[0] is not tools[0]  # copy, not the caller's object
+    assert out[1]["name"] == "read_file"
+
+
+def test_responses_tools_default_parameters_schema_preserved():
+    from agent.codex_responses_adapter import _responses_tools
+
+    out = _responses_tools([{"type": "function", "function": {"name": "bare"}}])
+    assert out[0]["parameters"] == {"type": "object", "properties": {}}
+
+
+def test_responses_tools_duplicate_names_preserved_in_order():
+    from agent.codex_responses_adapter import _responses_tools
+
+    out = _responses_tools([_valid_function_tool(name="dup"), _valid_function_tool(name="dup")])
+    assert [t["name"] for t in out] == ["dup", "dup"]

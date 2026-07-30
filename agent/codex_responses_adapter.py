@@ -265,19 +265,47 @@ def _derive_responses_function_call_id(
 # ---------------------------------------------------------------------------
 
 def _responses_tools(tools: Optional[List[Dict[str, Any]]] = None) -> Optional[List[Dict[str, Any]]]:
-    """Convert chat-completions tool schemas to Responses function-tool schemas."""
+    """Convert chat-completions tool schemas to Responses function-tool schemas.
+
+    Fails fast on malformed tool definitions instead of silently skipping
+    them: a dropped tool removes an agent capability with no diagnostic, and
+    a partial tool list would otherwise be transmitted as if it were the
+    whole request (the downstream ``_preflight_codex_api_kwargs`` validator
+    only sees what survives this conversion, so it cannot catch the
+    omission).  Provider-executed built-in declarations (``{"type":
+    "web_search"}`` etc.) are passed through verbatim — mirroring the
+    preflight validator — rather than being dropped for lacking a
+    ``function`` schema.  Error messages carry the failing index and field
+    and never include tool payload values.
+    """
     if not tools:
         return None
 
     converted: List[Dict[str, Any]] = []
-    for item in tools:
-        fn = item.get("function", {}) if isinstance(item, dict) else {}
+    for index, item in enumerate(tools):
+        if not isinstance(item, dict):
+            raise ValueError(f"Responses tool[{index}] must be an object.")
+        tool_type = item.get("type")
+        if tool_type in _RESPONSES_BUILTIN_TOOL_TYPES:
+            # Provider-executed built-in tool declaration — no client-side
+            # function schema; the provider owns the implementation.
+            converted.append(dict(item))
+            continue
+        if tool_type != "function":
+            raise ValueError(
+                f"Responses tool[{index}] has unsupported type {tool_type!r}; "
+                "expected a Chat Completions function tool or a Responses "
+                "built-in tool declaration."
+            )
+        fn = item.get("function")
+        if not isinstance(fn, dict):
+            raise ValueError(f"Responses tool[{index}] is missing its function definition.")
         name = fn.get("name")
         if not isinstance(name, str) or not name.strip():
-            continue
+            raise ValueError(f"Responses tool[{index}] is missing function.name.")
         converted.append({
             "type": "function",
-            "name": name,
+            "name": name.strip(),
             "description": fn.get("description", ""),
             "strict": False,
             "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
